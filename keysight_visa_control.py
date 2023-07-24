@@ -1,26 +1,20 @@
 import pyvisa
+from dataclasses import dataclass
 
-class KeysightScope:
-    def __init__(self, resource_id: str=None, loud: bool=False) -> None:
-        self.loud = loud
-
+class Scope:
+    def __init__(self, resource_id: str=None, loud: bool=False):
         if not resource_id:
-            self.scope = self.get_resource()
+            self.scope = self._get_resource()
         else:
             try:
                 self.scope = pyvisa.ResourceManager().open_resource(resource_id)
             except OSError:
                 print("Resource Identifier '{resource_id}' is invalid...")
-                self.scope = self.get_resource()
-        
-        self.trig_settings = self.get_trigger_setup()
-        self.channels = ["channel1", "channel2", "channel3", "channel4"]
-        self.chan_settings = {}
-        for c in self.channels:
-            self.chan_settings[c] = self.get_channel_setup(c)
-        self.timebase_settings = self.get_timebase_setup()
+                self.scope = self._get_resource()
 
-    def get_resource(self) -> pyvisa.Resource:
+        self.loud = loud
+
+    def _get_resource(self) -> pyvisa.Resource:
         """Gets a scope from the visa manager via command line options"""
         # Instantiate the Resource Manager and get the resources
         rm = pyvisa.ResourceManager()
@@ -43,7 +37,7 @@ class KeysightScope:
         except ValueError:
             print(f"'{res}' is not a selectable resource.")
             print("Restarting...")
-            return self.get_resource()
+            return self._get_resource()
 
     def _check_instrument_errors(self, command: str) -> None:
         """Checks for an error in a query or command by hitting the system error query"""
@@ -60,135 +54,102 @@ class KeysightScope:
                 print("Exited because of error.")
                 raise ValueError("MAJOR SYSTEM ERROR")
 
-    def _query(self, q: str) -> str:
+    def query(self, q: str) -> str:
         """Sends a query string to the oscilloscope"""
         result = self.scope.query(q+"?")
         self._check_instrument_errors(q+"?")
         if self.loud:
             print(result, end='')
         return result
-
-    def _command(self, command: str) -> None: 
+    
+    def command(self, command: str) -> None: 
         """Writes a command string to the oscilloscope"""
         if self.loud:
             print(f"Writing Command '{command}'...")
         self.scope.write(command)
         self._check_instrument_errors(command)
 
-    def force_trigger(self) -> None:
-        if self.loud:
-            print("Forced Trigger")
-        self._command(":TRIGger:FORCe")
-    
-    def autoscale(self) -> None:
-        if self.loud:
-            print("Autoscale ...")
-        self._command(":AUToscale")
+    def close(self):
+        self.scope.close()
 
-    def setup_trigger_edge(self, source: str=None, level: str=None,
-                                 coupling: str=None, slope: str=None, reject: str=None) -> None:
+@dataclass
+class Trigger:
+    __scope: Scope
+    _loud: bool
+    __trigger_queries = {"HF_Reject": "HFReject",
+                       "Hold-off": "HOLDoff",
+                       "Hold-off Maximum": "HOLDoff:MAXimum",
+                       "Hold-off Minimum": "HOLDoff:MINimum",
+                       "Hold-off Random": "HOLDoff:RANDom",
+                       "Mode": "MODE",
+                       "Noise reject": "NREJect",
+                       "Sweep": "SWEep",
+                       "Edge:Coupling": "EDGE:COUPling",
+                       "Edge:Reject": "EDGE:REJect",
+                       "Edge:Level": "EDGE:LEVel",
+                       "Edge:Slope": "EDGE:SLOPe",
+                       "Edge:Source": "EDGE:SOURce"}
 
-        if not self.trig_settings["Mode"] == "EDGE":
-            self._command(":TRIGger:MODE EDGE")
+    __trig_cmds_allwd = {"mode":    ["EDGE", "GLITch", "PATTern", "TV", "EBURst",
+                                     "OR", "RUNT", "SHOLd", "TRANsition", "SBUS"],
+                         "source":  ["channel1", "channel2", "channel3", "channel4", 
+                                     "external", "line", "wgen", "wgen1", "wgen2", "wmod"],
+                         "level":   [],
+                         "coupling":["dc", "ac", "lfreject"],
+                         "slope":   ["positive", "negative", "either", "alternate"],
+                         "reject":  ["off", "lfreject", "hfreject"]}
 
-        if source and source.lower() != self.trig_settings["Edge:Source"].lower():
-            allowed = ["channel1", "channel2", "channel3", "channel4", 
-                       "external", "line", "wgen", "wgen1", "wgen2", "wmod"]
-            if source not in allowed:
-                print(f"'{source}' is not an invalid type. Must select from: {a for a in allowed}")
-            self._command(f":TRIG:EDGE:SOURCE {source}")
+    @property
+    def __trigger_lowers(self) -> dict[str]:
+        return {k.lower():v for k,v in self.__trigger_queries.items()}
 
-        source = self.trig_settings["Edge:Source"] if not source else source 
+    @property
+    def loud(self):
+        """The loud property."""
+        return self._loud
+    @loud.setter
+    def loud(self, loud):
+        self._loud = loud
 
-        if level and level.lower() != self.trig_settings["Edge:Level"].lower():
-            self._command(f":TRIG:EDGE:LEVel {level}")
-
-        if coupling and coupling.lower() != self.trig_settings["Edge:Coupling"].lower():
-            allowed = ["dc", "ac", "lfreject"]
-            if not coupling.lower() in allowed: 
-                print(f"'{coupling}' is an invalid coupling type - select (AC, DC, or LFReject)")
-            else:
-                self._command(f":TRIG:EDGE:COUPling {coupling}")
-        
-        if slope and slope.lower() != self.trig_settings["Edge:Slope"].lower():
-            allowed = ["positive", "negative", "either", "alternate"]
-            if slope.lower() not in allowed:
-                print(f"'{slope}' is not a valid type. Must be: {a for a in allowed}")
-            else:
-                self._command(f":TRIG:EDGE:SLOPE {slope}")
-
-        if reject and reject.lower() != self.trig_settings["Edge:Reject"].lower():
-            allowed = ["off", "lfreject", "hfreject"]
-            if reject.lower() not in allowed:
-                print(f"'{reject}' is not a valid type. Must be: {a for a in allowed}")
-            else:
-                self._command(f":TRIG:EDGE:REJect {reject}")
-
-        self.trig_settings = self.get_trigger_setup()
-
-    # TODO: Make not of every setting changed and give a summary.
-    def setup_channel(self, channel: str, scale: str=None, offset: str=None) -> None:
-
-        channel = channel.lower()
-
-        if channel not in self.channels:
-            raise ValueError(f"'{channel}' is not an allowed channel. Must be: {c for c in self.channels}")
-
-        def_settings = self.chan_settings[channel]
-       
-        #TODO: scale can come in format <scale>[suffix] where scale is a number and suffix is mV or V
-        #      Want to check for this and only this
-        if scale and scale.lower() != def_settings["Scale"].lower():
-            self._command(f":{channel}:SCALe {scale}")
-
-        #TODO: Same as scale - suffixes can occur
-        if offset and offset.lower() != def_settings["Offset"].lower():
-            self._command(f":{channel}:OFFSet {offset}")
-
-        self.chan_settings[channel] = self.get_channel_setup(channel)
-
-    # TODO: Flesh this out some more
-    def setup_timebase(self, scale: str=None, position: str=None) -> None:
-
-        if scale and scale.lower() != self.timebase_settings["Scale"].lower():
-            self._command(f":TIMebase:SCALe {scale}")
-
-        if position and position.lower() != self.timebase_settings["Position"].lower():
-            self._command(f":TIMebase:POSition {position}")
-    
-        self.timebase_settings = self.get_timebase_setup()
-
-    #TODO: Flesh out with every trigger setting - potentially make settings object
-    def get_trigger_setup(self) -> dict[str, str]:
+    @property
+    def state(self) -> dict[str, str]:
         """Gets the setup of the trigger by querying every setting."""
         trig_settings = {}
-        trigger_queries = {"HF_Reject": "HFReject",
-                           "Hold-off": "HOLDoff",
-                           "Hold-off Maximum": "HOLDoff:MAXimum",
-                           "Hold-off Minimum": "HOLDoff:MINimum",
-                           "Hold-off Random": "HOLDoff:RANDom",
-                           "Mode": "MODE",
-                           "Noise reject": "NREJect",
-                           "Sweep": "SWEep",
-                           "Edge:Coupling": "EDGE:COUPling",
-                           "Edge:Reject": "EDGE:REJect",
-                           "Edge:Level": "EDGE:LEVel",
-                           "Edge:Slope": "EDGE:SLOPe",
-                           "Edge:Source": "EDGE:SOURce"}
 
-        for t_set, q in trigger_queries.items():
-            trig_settings[t_set] = self._query(f":TRIGger:{q}").strip()
+        for t_set, q in self.__trigger_queries.items():
+            trig_settings[t_set] = self.__scope.query(f":TRIGger:{q}").strip()
             if self.loud:
                 print(f"TRIG: Got-> {t_set} = {trig_settings[t_set]}")
         return trig_settings
 
-    def get_channel_setup(self, channel: str="channel1") -> dict[str, str]:
-        if not channel in self.channels:
-            print("Invalid channel selection: '{channel}'. Must be: {c for c in allowed}")
-            return
+    def get_setting(self, setting):
+        if setting not in self.__trigger_queries.keys():
+            if self.loud:
+                print(f"No trigger setting for '{setting}'.")
+                print(f"Allowed settings:\n {x for x in self.__trigger_queries}")
+            raise ValueError
+        return self.state[setting]
 
-        chan_settings = {} 
-        chan_queries = {"Bandwidth Limit": "BWLimit",
+    def set(self, s, val):
+        s = s.lower() # Setting desired (key)
+
+        if s not in self.__trig_cmds_allwd.keys():
+            raise ValueError(f"'{s}' is not a valid editable settings.\n \
+                    Settings allowed include:\n {self.__trig_cmds_allwd.keys()}")
+
+        if (len(self.__trig_cmds_allwd[s]) > 1) and (val not in self.__trig_cmds_allwd[s]):
+            raise ValueError(f"'{val}' is not an allowable input type for this setting.\n \
+                    allowed parameters are:\n {self.__trig_cmds_allwd[s]}")
+
+        self.__scope.command(f":TRIGger:{self.__trigger_lowers[s]} {val}")
+
+#TODO: Add more settings that can be changed here
+@dataclass
+class Channel:
+    __scope: Scope
+    channel_id: str
+    _loud: bool = False
+    __channel_queries ={"Bandwidth Limit": "BWLimit",
                         "Coupling": "COUPling",
                         "Display": "DISPlay",
                         "Impedance": "Impedance",
@@ -196,73 +157,186 @@ class KeysightScope:
                         "Label": "LABel",
                         "Offset": "OFFSet",
                         "Probe": "PROBe",
-                        #"Probe:Button": "PROBe:BTN",
-                        #"Probe:External": "PROBe:EXTernal",
-                        #"Probe:External:Gain": "PROBe:EXTernal:GAIN",
-                        #"Probe:External:Units": "PROBe:EXTernal:UNITs",
-                        #"Probe:ID": "PROBe:ID",
-                        #"Probe:Model": "PROBE:MMODel",
-                        #"Probe:Mode": "PROBe:MODE",
-                        #"Probe:R-Sense": "PROBE:RSENse",
-                        #"Probe:Skew": "PROBe:SKEW",
-                        #"Probe:SigType": "PROBe:STYPe",
-                        #"Probe:Zoom": "PROBe:ZOOM",
+                        "Probe:Button": "PROBe:BTN",
+                        "Probe:External": "PROBe:EXTernal",
+                        "Probe:External:Gain": "PROBe:EXTernal:GAIN",
+                        "Probe:External:Units": "PROBe:EXTernal:UNITs",
+                        "Probe:ID": "PROBe:ID",
+                        "Probe:Model": "PROBE:MMODel",
+                        "Probe:Mode": "PROBe:MODE",
+                        "Probe:R-Sense": "PROBE:RSENse",
+                        "Probe:Skew": "PROBe:SKEW",
+                        "Probe:SigType": "PROBe:STYPe",
+                        "Probe:Zoom": "PROBe:ZOOM",
                         "Protection": "PROTection",
                         "Range": "RANGe",
                         "Scale": "SCALe",
                         "Units": "UNITs",
                         "Vernier": "VERNier"}
 
-        for c_set, q in chan_queries.items():
+    __chan_cmds_allwd = {"scale": [],
+                         "offset": [],
+                         "coupling": ["AC", "DC"]}
 
-            chan_settings[c_set] = self._query(f":{channel}:{q}").strip()
+    @property
+    def __channel_lowers(self) -> dict[str]:
+        return {k.lower():v for k,v in self.__channel_queries.items()}
+
+    @property
+    def loud(self):
+        """The loud property."""
+        return self._loud
+
+    @loud.setter
+    def loud(self, loud):
+        self._loud = loud
+
+    @property
+    def state(self) -> dict[str, str]:
+        """Gets the setup of the trigger by querying every setting."""
+        chan_settings = {}
+
+        for c_set, q in self.__channel_queries.items():
+            chan_settings[c_set] = self.__scope.query(f":{self.channel_id}:{q}").strip()
             if self.loud:
-                print(f"{channel}: Got-> {c_set} = {chan_settings[c_set]}")
+                print(f"{self.channel_id}: Got-> {c_set} = {chan_settings[c_set]}")
         return chan_settings
 
-    def get_timebase_setup(self) -> dict[str, str]:
-        timebase_settings = {}
-        timebase_queries = {"Mode": "MODE",
-                            "Position": "POSition",
-                            "Range": "RANGe",
-                            "Ref Clock": "REFClock",
-                            "Reference": "REFerence",
-                            "Reference:Location": "REFerence:LOCation",
-                            "Scale": "SCALe",
-                            "Vernier": "VERNier",
-                            "Window:Position": "WINDow:POSition",
-                            "Window:Range": "WINDow:RANGe",
-                            "Window:Scale": "WINDow:SCALe"}
+    def get_setting(self, setting):
+        if setting not in self.__chan_queries.keys():
+            if self.loud:
+                print(f"No channel setting for '{setting}'.")
+                print(f"Allowed settings:\n {x for x in self.__trigger_queries}")
+            raise ValueError
+        return self.state[setting]
+    
+    def set(self, s, val):
+        s = s.lower() # Setting desired (key)
 
-        for t_set, q in timebase_queries.items():
-            timebase_settings[t_set] = self._query(f":TIMebase:{q}").strip()
+        if s not in self.__chan_cmds_allwd.keys():
+            raise ValueError(f"'{s}' is not a valid editable settings.\n \
+                    Settings allowed include:\n {self.__chan_cmds_allwd.keys()}")
+
+        if (len(self.__chan_cmds_allwd[s]) > 1) and (val not in self.__chan_cmds_allwd[s]):
+            raise ValueError(f"'{val}' is not an allowable input type for this setting.\n \
+                    allowed parameters are:\n {self.__chan_cmds_allwd[s]}")
+
+        self.__scope.command(f":{self.channel_id}:{self.__channel_lowers[s]} {val}")
+
+@dataclass
+class Timebase:
+    __scope: Scope
+    _loud: bool = False
+    __tb_queries = {"Mode": "MODE",
+                    "Position": "POSition",
+                    "Range": "RANGe",
+                    "Ref Clock": "REFClock",
+                    "Reference": "REFerence",
+                    "Reference:Location": "REFerence:LOCation",
+                    "Scale": "SCALe",
+                    "Vernier": "VERNier",
+                    "Window:Position": "WINDow:POSition",
+                    "Window:Range": "WINDow:RANGe",
+                    "Window:Scale": "WINDow:SCALe"}
+
+    __tb_cmds_allwd = {"scale": [],
+                       "position": []}
+
+    @property
+    def __tb_lowers(self) -> dict[str]:
+        return {k.lower():v for k,v in self.__tb_queries.items()}
+
+    @property
+    def loud(self):
+        """The loud property."""
+        return self._loud
+
+    @loud.setter
+    def loud(self, loud):
+        self._loud = loud
+
+    @property
+    def state(self) -> dict[str, str]:
+        """Gets the setup of the trigger by querying every setting."""
+        tb_settings = {}
+
+        for tb_set, q in self.__tb_queries.items():
+            tb_settings[tb_set] = self.__scope.query(f":TIMebase:{q}").strip()
             if self.loud:
                 print(f"TIMEBASE: Got-> {t_set} = {timebase_settings[t_set]}")
+        return tb_settings
 
-        return timebase_settings
+    def get_setting(self, setting):
+        if setting not in self.__tb_queries.keys():
+            if self.loud:
+                print(f"No timebase setting for '{setting}'.")
+                print(f"Allowed settings:\n {self.__trigger_queries.keys()}")
+            raise ValueError
+        return self.state[setting]
+    
+    def set(self, s, val):
+        s = s.lower() # Setting desired (key)
+
+        if s not in self.__tb_cmds_allwd.keys():
+            raise ValueError(f"'{s}' is not a valid editable settings.\n \
+                    Settings allowed include:\n {self.__tb_cmds_allwd.keys()}")
+
+        if (len(self.__tb_cmds_allwd[s]) > 1) and (val not in self.__tb_cmds_allwd[s]):
+            raise ValueError(f"'{val}' is not an allowable input type for this setting.\n \
+                    allowed parameters are:\n {self.__tb_cmds_allwd[s]}")
+
+        self.__scope.command(f":TIMebase:{self.__tb_lowers[s]} {val}")
+
+
+class KeysightControl:
+    def __init__(self, resource_id: str=None, loud: bool=False) -> None: 
+        self.loud = loud
+        self.scope = Scope(resource_id, loud)
+        self.trigger = Trigger(self.scope, loud) 
+        self.channel_ids = ["channel1", "channel2", "channel3", "channel4"]
+        self.channel1 = Channel(self.scope, "channel1", loud)
+        self.channel2 = Channel(self.scope, "channel2", loud)
+        self.channel3 = Channel(self.scope, "channel3", loud)
+        self.channel4 = Channel(self.scope, "channel4", loud)
+        self.timebase = Timebase(self.scope, loud) 
+        self.channels = [self.channel1, self.channel2, self.channel3, self.channel4]
+
+    def force_trigger(self) -> None:
+        if self.loud:
+            print("Forced Trigger")
+        self.scope.command(":TRIGger:FORCe")
+    
+    def autoscale(self) -> None:
+        if self.loud:
+            print("Autoscale ...")
+        self.scope.command(":AUToscale")
 
     def setup_capture(self, source) -> dict[str, str]:
-        if not source in self.channels:
+        if not source in self.channel_ids:
             raise ValueError(f"'{source}' is not an acceptable channel to source data from.\n",
                                "Must be: {c for c in self.channels}")
-        self._command(":WAVeform:POINts:MODE RAW")
-        self._command(":WAVEform:POINTs 10240")
-        self._command(f":WAVeform:SOURce {source}")
-        self._command(f":WAVeform:FORMat BYTE")
+        self.scope.command(":WAVeform:POINts:MODE RAW")
+        self.scope.command(":WAVEform:POINTs 10240")
+        self.scope.command(f":WAVeform:SOURce {source}")
+        self.scope.command(f":WAVeform:FORMat BYTE")
 
     def capture_waveform(self, source: str="channel1", mode: str=None) -> list:
         max_data = 10_000_000
         self.setup_capture(source) 
-        data = self.scope.query_binary_values(f":WAVeform:DATA?", datatype='s') 
-        self._check_instrument_errors(f":WAVeform:DATA?")
+        data = self.scope.scope.query_binary_values(f":WAVeform:DATA?", datatype='s') 
+        self.scope._check_instrument_errors(f":WAVeform:DATA?")
         return data
 
     def set_loud(self, loud: bool):
         """Setter for 'loud' which will print verbose info about each command"""
         self.loud = loud
+        self.trigger.loud = loud
+        for channel in self.channels.values():
+            channel.loud = loud
 
     def close(self):
         self.scope.close()
+
 
 class Waveform:
     @staticmethod
@@ -274,14 +348,16 @@ class Waveform:
         return ":WAVeform:BYTeorder?"
 
 if __name__ == "__main__":
-    scope = KeysightScope("TCPIP::192.168.0.17::INSTR", loud=True)
-    scope._query("*IDN")
-    print(scope.trig_settings)
+    control = KeysightControl("TCPIP::192.168.0.17::INSTR", loud=True)
+    control.scope.query("*IDN")
+    print(control.trigger.state)
     # TODO: Maybe make objects for each thing that can have settings?
-    scope.setup_channel(channel="channel1", scale="3.00")
-    scope.setup_timebase(scale="0.0002", position="0.0")
-    scope._query(":TRIG:EDGE:level")
-    scope._query(":ACQuire:TYPE")
-    data = scope.capture_waveform()
+    control.trigger.set("mode", "EDGE")
+    control.channel1.set("Scale", "3.00")
+    control.timebase.set("Scale", "0.0002")
+    control.timebase.set("position", "0.0")
+    control.scope.query(":TRIG:EDGE:level")
+    control.scope.query(":ACQuire:TYPE")
+    data = control.capture_waveform()
     print(data)
-    scope.close()
+    control.close()
