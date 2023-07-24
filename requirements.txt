@@ -1,0 +1,2 @@
+PyVISA-py==0.7.0
+PyVISA==1.13.0
