@@ -1,7 +1,12 @@
 import pyvisa
 from dataclasses import dataclass
 
+#TODO: Implement the get waveform query here instead of in controller
+#      at the very least fully encapsulate so nowhere is calling Scope.scope.<method> instead
+#      of just Scope.<method>
 class Scope:
+    """ A basic wrapper that houses the keysight scope and necessary 
+        methods like query and command."""
     def __init__(self, resource_id: str=None, loud: bool=False):
         if not resource_id:
             self.scope = self._get_resource()
@@ -70,10 +75,12 @@ class Scope:
         self._check_instrument_errors(command)
 
     def close(self):
+        """Closes the vxi11 connection"""
         self.scope.close()
 
 @dataclass
 class Trigger:
+    """A dataclass that houses the Trigger command type"""
     __scope: Scope
     _loud: bool
     __trigger_queries = {"HF_Reject": "HFReject",
