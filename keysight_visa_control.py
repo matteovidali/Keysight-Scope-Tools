@@ -65,7 +65,7 @@ class Scope:
         self._check_instrument_errors(q+"?")
         if self.loud:
             print(result, end='')
-        return result
+        return result.strip()
     
     def command(self, command: str) -> None: 
         """Writes a command string to the oscilloscope"""
@@ -402,11 +402,16 @@ class KeysightControl:
         self.scope.command(f":WAVeform:SOURce {source}")
         self.scope.command(f":WAVeform:FORMat BYTE")
 
+    def set_trig_single(self):
+        self.scope.command(":SINGle")
+
     def capture_waveform(self, source: str="channel1", mode: str=None) -> list:
         max_data = 10_000_000
+        self.scope.command(f":WAVeform:SOURce {source}")
+        self.scope.command(":WAVEform:POINTs 10240")
         data = self.scope.scope.query_binary_values(f":WAVeform:DATA?", datatype='s') 
         self.scope._check_instrument_errors(f":WAVeform:DATA?")
-        return data
+        return [float(d) for d in data]
 
     def set_loud(self, loud: bool):
         """Setter for 'loud' which will print verbose info about each command"""
